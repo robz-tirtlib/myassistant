@@ -9,27 +9,35 @@ import requests
 import telebot
 
 import datetime
+from datetime import date
 
-from telebot import custom_filters
+from telebot import custom_filters, types
 from telebot.handler_backends import State, StatesGroup
 
 from telebot.storage import StateMemoryStorage
 
-import os
-
 import sqlite3
 
-from typing import Tuple
+from my_secrets import TOKEN
 
-from my_secrets import TOKEN, DIRECTORY, WEATHER_KEY
+from video_utils import (try_download, convert_timing, cut_the_clip, clear,
+                         create_video_keyboard)
 
-from pytube import YouTube
+from messages import start_message, help_message
 
-from moviepy.editor import VideoFileClip
+from weather_utils import (ask_weather_api, create_weather_mode_keyboard,
+                           create_weather_city_keyboard, weather_cities,
+                           weather_modes)
+
+from keyboards import (OUT_DATE, generate_calendar_days,
+                       generate_calendar_months, EMTPY_FIELD)
+
+from filters import calendar_factory, calendar_zoom, bind_filters
 
 
 def listener(messages) -> None:
     """When new messages arrive TeleBot will call this function."""
+
     for m in messages:
         if m.content_type == 'text':
             print(f'{m.chat.first_name} [{m.chat.id}]: {m.text}')
@@ -45,89 +53,189 @@ class MyStates(StatesGroup):
     """User's possible states"""
 
     # Video
-    video = State()
-    video_c = State()
-    date = State()
-    time = State()
+    video_choose = State()
+    video_pure = State()
+    video_cut = State()
+
+    # Reminders
+    date_time = State()
+    reminder_time = State()
 
     # Weather
-    weather_m = State()
-    weather = State()
+    weather_choose_mode = State()
+    weather_choose_city = State()
+    weather_city_input = State()
+
+
+"Service commands: start, help, cancel."
 
 
 @bot.message_handler(commands=["start"])
 def start(message) -> None:
     """Handling /start"""
 
-    bot.send_message(message.chat.id, """
-Привет! Я - твой личный ассистент.
-Чтобы понять, как со мной работать, напиши /help
-    """)
+    bot.send_message(message.chat.id, start_message)
 
 
 @bot.message_handler(commands=["help"])
 def help(message) -> None:
     """Handling /start"""
 
-    bot.send_message(message.chat.id, """
-Ты можешь попросить меня:
-- скачать видео с YouTube - /video
-- скачать обрезанное видео - /video_cut
-- показать курс валют - /valutes
-- показать погоду - /weather
-- поставить напоминалку - /reminder
-Нажми на нужную команду.
-    """)
+    bot.send_message(message.chat.id, help_message)
 
 
 @bot.message_handler(state="*", commands=['cancel'])
 def cancel_state(message) -> None:
     """Catches /cancel and cancels user's state"""
 
-    bot.send_message(message.chat.id, "Your state was cancelled.")
+    bot.send_message(message.chat.id, "Состояние сброшено.")
     bot.delete_state(message.from_user.id, message.chat.id)
+
+
+"Reminders"
 
 
 @bot.message_handler(commands=["reminder"])
 def reminder(message) -> None:
     """Handling /reminder and changind state"""
 
-    bot.send_message(message.chat.id, "Введите дату в формате YY-MM-dd")
-    bot.set_state(message.from_user.id, MyStates.date, message.chat.id)
+    now = date.today()
+    bot.set_state(message.from_user.id, MyStates.reminder_time, message.chat.id)
+    bot.send_message(message.chat.id,
+                     "Выберите дату.",
+                     reply_markup=generate_calendar_days(
+                        year=now.year,
+                        month=now.month))
 
 
-@bot.message_handler(state=MyStates.date)
-def date(message) -> None:
-    """Validation of the entered date and changind state if OK"""
+@bot.callback_query_handler(func=None,
+                            calendar_config=calendar_factory.filter())
+def calendar_action_handler(call: types.CallbackQuery):
+    callback_data: dict = calendar_factory.parse(callback_data=call.data)
+    year, month = int(callback_data['year']), int(callback_data['month'])
+    day = callback_data['day']
+
+    if day == EMTPY_FIELD:
+        markup = generate_calendar_days(year=year, month=month)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.id,
+                                      reply_markup=markup)
+    elif day == OUT_DATE:
+        pass
+    else:
+        with bot.retrieve_data(call.from_user.id) as data:
+            data['reminder_date'] = f"{year}-{month:02d}-{int(day):02d}"
+
+        bot.delete_message(call.message.chat.id, call.message.id)
+
+        bot.send_message(call.message.chat.id,
+                         "Напишите время в формате HH:MM")
+
+
+@bot.callback_query_handler(func=None,
+                            calendar_zoom_config=calendar_zoom.filter())
+def calendar_zoom_out_handler(call: types.CallbackQuery):
+    callback_data: dict = calendar_zoom.parse(callback_data=call.data)
+    year = int(callback_data.get('year'))
+
+    bot.edit_message_reply_markup(
+        call.message.chat.id,
+        call.message.id,
+        reply_markup=generate_calendar_months(year=year)
+        )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == EMTPY_FIELD)
+def callback_empty_field_handler(call: types.CallbackQuery):
+    bot.answer_callback_query(call.id)
+
+
+@bot.message_handler(state=MyStates.reminder_time)
+def reminder_time(message) -> None:
+
+    try:
+        datetime.datetime.strptime(message.text, '%H:%M')
+    except ValueError:
+        bot.send_message(message.chat.id, "Неверно введено время.")
+        return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        try:
-            datetime.datetime.strptime(message.text, '%Y-%m-%d')
-        except ValueError:
-            bot.send_message(message.chat.id, "Incorrect data format, should be YYYY-MM-DD")
-            return
-        data['date'] = message.text
+        date_and_time = f"{data['reminder_date']} {message.text}:00"
 
-    bot.send_message(message.chat.id, "Введите время в формате HH:MM")
-    bot.set_state(message.from_user.id, MyStates.time, message.chat.id)
+    add_to_db(message.chat.id, date_and_time)
 
-
-@bot.message_handler(state=MyStates.time)
-def date_time(message) -> None:
-    """Validation of the entered time and deleting state if OK"""
-
-    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        try:
-            datetime.datetime.strptime(message.text, '%H:%M')
-        except ValueError:
-            bot.send_message(message.chat.id, "Incorrect data format, should be HH:MM")
-            return
-
-        date_and_time = f"{data['date']} {message.text}:00"
-        bot.send_message(message.chat.id, date_and_time)
-        add_to_db(message.chat.id, date_and_time)
+    bot.send_message(
+        message.chat.id,
+        "Напоминание установлено на " + date_and_time
+        )
 
     bot.delete_state(message.from_user.id, message.chat.id)
+
+
+# @bot.message_handler(state=MyStates.date_time)
+# def reminder_date_time(message) -> None:
+#     """Validate date, time and add reminder to DB"""
+
+#     r_date, r_time = message.text.split()
+
+#     try:
+#         datetime.datetime.strptime(r_date, '%Y-%m-%d')
+#     except ValueError:
+#         bot.send_message(message.chat.id, "Неверно введена дата.")
+#         return
+
+#     try:
+#         datetime.datetime.strptime(r_time, '%H:%M')
+#     except ValueError:
+#         bot.send_message(message.chat.id, "Неверно введено время.")
+#         return
+
+#     date_and_time = f"{message.text}:00"
+#     add_to_db(message.chat.id, date_and_time)
+
+#     bot.send_message(
+#         message.chat.id,
+#         "Напоминание установлено на " + date_and_time
+#         )
+
+#     bot.delete_state(message.from_user.id, message.chat.id)
+
+
+# @bot.message_handler(commands=["reminder"])
+# def reminder(message) -> None:
+#     """Handling /reminder and changind state"""
+
+#     bot.send_message(message.chat.id,
+#                      "Введите дату и время в формате YYYY-MM-DD HH:MM.")
+#     bot.set_state(message.from_user.id, MyStates.date_time, message.chat.id)
+
+
+# @bot.message_handler(state=MyStates.date_time)
+# def reminder_date_time(message) -> None:
+#     """Validate date, time and add reminder to DB"""
+
+#     r_date, r_time = message.text.split()
+
+#     try:
+#         datetime.datetime.strptime(r_date, '%Y-%m-%d')
+#     except ValueError:
+#         bot.send_message(message.chat.id, "Неверно введена дата.")
+#         return
+
+#     try:
+#         datetime.datetime.strptime(r_time, '%H:%M')
+#     except ValueError:
+#         bot.send_message(message.chat.id, "Неверно введено время.")
+#         return
+
+#     date_and_time = f"{message.text}:00"
+#     add_to_db(message.chat.id, date_and_time)
+
+#     bot.send_message(
+#         message.chat.id,
+#         "Напоминание установлено на " + date_and_time
+#         )
+
+#     bot.delete_state(message.from_user.id, message.chat.id)
 
 
 def add_to_db(user_id, date_time) -> None:
@@ -191,123 +299,86 @@ def do_check_reminders():
         time.sleep(1)
 
 
+"Weather"
+
+
 @bot.message_handler(commands=["weather"])
 def handle_weather(message) -> None:
     """Calls an API to get today's weather forecast"""
 
-    bot.send_message(message.chat.id,
-                     """
-Напиши режим:
-- щ (сейчас)
-- с (сегодня)
-- з (завтра)
-    """)
+    bot.send_message(message.chat.id, "Выбери режим.",
+                     reply_markup=create_weather_mode_keyboard())
 
-    bot.set_state(message.from_user.id, MyStates.weather_m, message.chat.id)
+    bot.set_state(message.from_user.id, MyStates.weather_choose_mode,
+                  message.chat.id)
 
 
-@bot.message_handler(state=MyStates.weather_m)
-def weather_mode(message) -> None:
+@bot.message_handler(state=MyStates.weather_choose_mode)
+def weather_choose_mode(message) -> None:
+    """Choose weather mode"""
 
-    if message.text not in ['щ', 'с', 'з']:
-        bot.send_message(message.chat.id, "Некорретный режим. Напиши еще раз.")
+    if message.text not in weather_modes:
+        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
         return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         data['weather_mode'] = message.text
 
-    bot.send_message(message.chat.id, "Напиши название города.")
+    markup = create_weather_city_keyboard()
 
-    bot.set_state(message.from_user.id, MyStates.weather, message.chat.id)
+    bot.send_message(message.chat.id, "Выбери название города.",
+                     reply_markup=markup)
+
+    bot.set_state(message.from_user.id, MyStates.weather_choose_city,
+                  message.chat.id)
 
 
-@bot.message_handler(state=MyStates.weather)
-def weather(message) -> None:
-    """Calls an API to get today's weather forecast"""
+@bot.message_handler(state=MyStates.weather_choose_city)
+def weather_choose_city(message) -> None:
+    if message.text not in weather_cities and message.text != 'другой':
+        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        return
 
-    city = message.text
+    if message.text != "другой":
+        with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+            data["city"] = message.text
+
+        weather_final(message.from_user.id)
+    else:
+        markup = telebot.types.ReplyKeyboardRemove()
+
+        bot.send_message(message.chat.id, "Введите название города.",
+                         reply_markup=markup)
+        bot.set_state(message.from_user.id, MyStates.weather_city_input,
+                      message.chat.id)
+
+
+@bot.message_handler(state=MyStates.weather_city_input)
+def weather_city_input(message) -> None:
+    """User writes custom city"""
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data["city"] = message.text
+
+    weather_final(message.from_user.id)
+
+
+def weather_final(id):
+    with bot.retrieve_data(id) as data:
         try:
-            info = ask_weather_api(city, data['weather_mode'])
+            info = ask_weather_api(data["city"], data['weather_mode'])
         except ValueError as error:
-            bot.send_message(message.chat.id, str(error))
+            bot.send_message(id, str(error) + "\nДавай по новой.")
+            bot.set_state(id, MyStates.weather_choose_mode)
 
-    bot.send_message(message.chat.id, info)
+    markup = telebot.types.ReplyKeyboardRemove()
 
-    bot.delete_state(message.from_user.id, message.chat.id)
+    bot.send_message(id, info, reply_markup=markup)
 
-
-def ask_weather_api(city, mode):
-
-    params = {
-        'q': city,
-        'appid': WEATHER_KEY,
-        'units': 'metric',
-        'lang': 'ru'
-    }
-
-    if not city_exists(params):
-        raise ValueError("Не удалось получить информацию по городу")
-
-    if mode == 'щ':
-        return now_weather(params)
-    elif mode == 'с':
-        day = str(datetime.date.today())
-        return day_weather(params, day)
-    elif mode == 'з':
-        day = str(datetime.date.today() + datetime.timedelta(days=1))
-        return day_weather(params, day)
+    bot.delete_state(id)
 
 
-def city_exists(params):
-    test_url = 'https://api.openweathermap.org/data/2.5/weather'
-    test_response = requests.get(test_url, params=params).json()
-
-    if test_response["cod"] == "404":
-        return False
-    return True
-
-
-def now_weather(params):
-
-    url = 'https://api.openweathermap.org/data/2.5/weather'
-
-    result = requests.get(url, params=params).json()
-
-    return f"""
-{params["q"].capitalize()}
----------------------
-Температура: {result["main"]["temp"]},
-Ощущается как: {result["main"]["feels_like"]},
-Влажность: {result["main"]["humidity"]},
-В общем: {result["weather"][0]["description"]}
-"""
-
-
-def day_weather(params, day: str):
-
-    url = 'https://api.openweathermap.org/data/2.5/forecast'
-
-    result = requests.get(url, params=params).json()
-
-    response = f"{params['q'].capitalize()}\n"
-
-    for data in result["list"]:
-        date, time = data["dt_txt"].split()
-        start, end = "09:00:00", "21:00:00"
-        if start <= time <= end and date == day:
-            response += f"""
-{time}
----------------------
-Температура: {data["main"]["temp"]},
-Ощущается как: {data["main"]["feels_like"]},
-Влажность: {data["main"]["humidity"]},
-В общем: {data["weather"][0]["description"]}
-
-"""
-
-    return response
+"Valutes"
 
 
 @bot.message_handler(commands=["valutes"])
@@ -329,64 +400,40 @@ def handle_valutes(message) -> None:
                      f"Сегодня такой движ:\n\nДоллар: {usd},\nЕвро: {eur}")
 
 
+"Video"
+
+
 @bot.message_handler(commands=["video"])
 def handle_video(message) -> None:
-    bot.set_state(message.from_user.id, MyStates.video, message.chat.id)
+    bot.send_message(
+        message.chat.id, "Видос отсылать целиком или обрезать?",
+        reply_markup=create_video_keyboard())
+    bot.set_state(message.from_user.id, MyStates.video_choose, message.chat.id)
 
 
-@bot.message_handler(commands=["video_cut"])
-def handle_video_cut(message) -> None:
-    bot.set_state(message.from_user.id, MyStates.video_c, message.chat.id)
+@bot.message_handler(state=MyStates.video_choose)
+def video_choose(message) -> None:
+
+    if message.text not in ['Целиком', 'Обрезать']:
+        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        return
+
+    markup = telebot.types.ReplyKeyboardRemove()
+
+    if message.text == 'Целиком':
+        response = "Кидай ссылку."
+        bot.set_state(message.from_user.id, MyStates.video_pure,
+                      message.chat.id)
+    else:
+        response = "Кидай ссылку и тайминг в формате XX:XX-YY:YY"
+        bot.set_state(message.from_user.id, MyStates.video_cut,
+                      message.chat.id)
+
+    bot.send_message(message.chat.id, response, reply_markup=markup)
 
 
-def validate_timing(timing, clip_len) -> Tuple[str, str]:
-    try:
-        start, end = timing.split('-')
-        start = datetime.datetime.strptime(start, '%M:%S')
-        end = datetime.datetime.strptime(end, '%M:%S')
-        clip_len = f'{clip_len // 60}:{clip_len % 60}'
-
-        if end < start or end > datetime.datetime.strptime(clip_len, '%M:%S'):
-            raise ValueError
-    except ValueError:
-        raise ValueError("Неправильный формат данных, должно быть MM:SS-MM:SS")
-
-    return start.strftime("%M:%S"), end.strftime("%M:%S")
-
-
-def try_download(chat_id, url, timing=None):
-    # Можно ли получить видос по урлу
-
-    start, end = None, None
-
-    try:
-        v = YouTube(url)
-    except Exception as error:
-        raise error
-
-    # Если надо резать
-
-    if timing is not None:
-
-        # Корректны ли введенные тайминги
-
-        try:
-            start, end = validate_timing(timing, v.length)
-        except ValueError as error:
-            raise error
-
-    # Качается ли видос
-
-    try:
-        path = download_video(url, chat_id)
-    except Exception as error:
-        raise error
-
-    return path, start, end
-
-
-@bot.message_handler(state=MyStates.video)
-def video(message) -> None:
+@bot.message_handler(state=MyStates.video_pure)
+def video_pure(message) -> None:
 
     url = message.text
 
@@ -405,7 +452,7 @@ def video(message) -> None:
     bot.delete_state(message.from_user.id, message.chat.id)
 
 
-@bot.message_handler(state=MyStates.video_c)
+@bot.message_handler(state=MyStates.video_cut)
 def video_cut(message) -> None:
     url, timing = message.text.split()
 
@@ -417,9 +464,7 @@ def video_cut(message) -> None:
     # Режем видос
 
     with open(path, 'rb') as video:
-        path_cut = False
-        while not path_cut:
-            path_cut = cut_the_clip(message, *convert_timing(start, end))
+        path_cut = cut_the_clip(message, *convert_timing(start, end))
 
     # Отправляем видос
 
@@ -444,42 +489,9 @@ def handle_text(message):
     bot.send_message(message.chat.id, 'Сори, не знаю, как ответить :(')
 
 
-def download_video(video_url: str, chat_id: int) -> str:
-    try:
-        v = YouTube(video_url)
-        video = v.streams.filter(progressive=True).last()
-        video.download(output_path=DIRECTORY, filename=f'{chat_id}.mp4')
-    except Exception as error:
-        raise error
-
-    print("\nDownloading completed.")
-    return DIRECTORY + f'/{chat_id}.mp4'
-
-
-def convert_timing(start, end):
-    start = int(start[:2]) * 60 + int(start[3:])
-    end = int(end[:2]) * 60 + int(end[3:])
-    return start, end
-
-
-def cut_the_clip(message, start, end):
-    clip_name = message.chat.id
-
-    with VideoFileClip(DIRECTORY + f"/{clip_name}.mp4") as clip:
-        clip = clip.subclip(start, end)
-        bot.send_message(message.chat.id, 'Обсчет может занять некоторое время.')
-        clip.write_videofile(DIRECTORY + f"/cut{clip_name}.mp4")
-
-    return DIRECTORY + f'/cut{clip_name}.mp4'
-
-
-def clear(*args):
-    for path in args:
-        if os.path.exists(path):
-            os.remove(path)
-
-
 bot.add_custom_filter(custom_filters.StateFilter(bot))
+
+bind_filters(bot)
 
 thread = Thread(target=do_check_reminders)
 thread.start()

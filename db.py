@@ -20,7 +20,7 @@ c = db.cursor()
 # c.execute("""
 # INSERT INTO reminders
 # VALUES
-#     (403198902, datetime('2022-07-27 22:15:00'));
+#     (403198902, datetime('2022-07-29 15:11:00'));
 # """)
 
 db.commit()
@@ -31,7 +31,7 @@ FROM reminders
 WHERE DATE(reminder_date) <= DATE('now')
       AND strftime('%H %M', datetime(reminder_date)) <= strftime('%H %M', datetime('now', 'localtime'));
 """)
-
+# c.execute("""SELECT * FROM reminders""")
 print(c.fetchall())
 
 db.close()
