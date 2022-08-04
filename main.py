@@ -60,6 +60,7 @@ class MyStates(StatesGroup):
     # Reminders
     date_time = State()
     reminder_time = State()
+    reminder_text = State()
 
     # Weather
     weather_choose_mode = State()
@@ -159,17 +160,27 @@ def reminder_time(message) -> None:
         return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        date_and_time = f"{data['reminder_date']} {message.text}:00"
+        data["date_and_time"] = f"{data['reminder_date']} {message.text}:00"
 
-    add_to_db(message.chat.id, date_and_time)
+    bot.send_message(message.chat.id, "Введите текст напоминания.")
+
+    bot.set_state(message.from_user.id, MyStates.reminder_text, message.chat.id)
+
+
+@bot.message_handler(state=MyStates.reminder_text)
+def reminder_text(message) -> None:
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        date_and_time = data["date_and_time"]
+
+    add_to_db(message.chat.id, date_and_time, message.text)
 
     bot.send_message(
         message.chat.id,
-        "Напоминание установлено на " + date_and_time
+        f'Напоминание "{message.text}" установлено на ' + date_and_time
         )
 
     bot.delete_state(message.from_user.id, message.chat.id)
-
 
 # @bot.message_handler(state=MyStates.date_time)
 # def reminder_date_time(message) -> None:
@@ -238,7 +249,7 @@ def reminder_time(message) -> None:
 #     bot.delete_state(message.from_user.id, message.chat.id)
 
 
-def add_to_db(user_id, date_time) -> None:
+def add_to_db(user_id, date_time, reminder_text) -> None:
     """Adds reminder from user to DB"""
 
     db = sqlite3.connect('myassistant.db')
@@ -247,7 +258,7 @@ def add_to_db(user_id, date_time) -> None:
     query = f"""
     INSERT INTO reminders
     VALUES
-        ({user_id}, datetime('{date_time}'));
+        ({user_id}, datetime('{date_time}'), "{reminder_text}");
     """
     c.execute(query)
 
@@ -263,7 +274,7 @@ def get_reminders():
     c = db.cursor()
 
     query_select = """
-SELECT user_id
+SELECT user_id, reminder_text
 FROM reminders
 WHERE DATE(reminder_date) <= DATE('now')
       AND strftime('%H %M', datetime(reminder_date)) <= strftime('%H %M', datetime('now', 'localtime'));
@@ -271,7 +282,7 @@ WHERE DATE(reminder_date) <= DATE('now')
 
     c.execute(query_select)
 
-    to_remind = c.fetchall()
+    reminders = c.fetchall()
 
     query_delete = """
 DELETE FROM reminders
@@ -283,12 +294,13 @@ WHERE DATE(reminder_date) <= DATE('now')
     db.commit()
     db.close()
 
-    remind_users(to_remind)
+    remind_users(reminders)
 
 
-def remind_users(user_ids):
-    for user_id in user_ids:
-        bot.send_message(user_id[0], "Ало бля")
+def remind_users(reminders):
+    for reminder in reminders:
+        user_id, reminder_text = reminder
+        bot.send_message(user_id, reminder_text)
 
 
 def do_check_reminders():
