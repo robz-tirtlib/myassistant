@@ -21,7 +21,7 @@ import sqlite3
 from my_secrets import TOKEN
 
 from video_utils import (try_download, convert_timing, cut_the_clip, clear,
-                         create_video_keyboard)
+                         create_video_keyboard, video_modes)
 
 from messages import start_message, help_message
 
@@ -98,10 +98,11 @@ def cancel_state(message) -> None:
 
 @bot.message_handler(commands=["reminder"])
 def reminder(message) -> None:
-    """Handling /reminder and changind state"""
+    """Handling /reminder: creating calendar and changing state"""
 
     now = date.today()
-    bot.set_state(message.from_user.id, MyStates.reminder_time, message.chat.id)
+    bot.set_state(message.from_user.id, MyStates.reminder_time,
+                  message.chat.id)
     bot.send_message(message.chat.id,
                      "Выберите дату.",
                      reply_markup=generate_calendar_days(
@@ -112,17 +113,21 @@ def reminder(message) -> None:
 @bot.callback_query_handler(func=None,
                             calendar_config=calendar_factory.filter())
 def calendar_action_handler(call: types.CallbackQuery):
+    """Handling calendar clicks"""
+
     callback_data: dict = calendar_factory.parse(callback_data=call.data)
     year, month = int(callback_data['year']), int(callback_data['month'])
     day = callback_data['day']
 
-    if day == EMTPY_FIELD:
-        markup = generate_calendar_days(year=year, month=month)
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.id,
-                                      reply_markup=markup)
-    elif day == OUT_DATE:
-        pass
-    else:
+    if day == EMTPY_FIELD:  # Prev/next month
+        bot.edit_message_reply_markup(
+            call.message.chat.id,
+            call.message.id,
+            reply_markup=generate_calendar_days(year=year, month=month)
+            )
+    elif day == OUT_DATE:  # Days from other months
+        bot.answer_callback_query(call.id)
+    else:  # Day from current month
         with bot.retrieve_data(call.from_user.id) as data:
             data['reminder_date'] = f"{year}-{month:02d}-{int(day):02d}"
 
@@ -135,6 +140,8 @@ def calendar_action_handler(call: types.CallbackQuery):
 @bot.callback_query_handler(func=None,
                             calendar_zoom_config=calendar_zoom.filter())
 def calendar_zoom_out_handler(call: types.CallbackQuery):
+    """Handling 'Zoom out' click (changing month)"""
+
     callback_data: dict = calendar_zoom.parse(callback_data=call.data)
     year = int(callback_data.get('year'))
 
@@ -147,11 +154,14 @@ def calendar_zoom_out_handler(call: types.CallbackQuery):
 
 @bot.callback_query_handler(func=lambda call: call.data == EMTPY_FIELD)
 def callback_empty_field_handler(call: types.CallbackQuery):
+    """Handling clicks on empty field on calendar"""
+
     bot.answer_callback_query(call.id)
 
 
 @bot.message_handler(state=MyStates.reminder_time)
 def reminder_time(message) -> None:
+    """Validating user's time for reminder and asking for text"""
 
     try:
         datetime.datetime.strptime(message.text, '%H:%M')
@@ -169,6 +179,7 @@ def reminder_time(message) -> None:
 
 @bot.message_handler(state=MyStates.reminder_text)
 def reminder_text(message) -> None:
+    """Adding reminder to DB"""
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         date_and_time = data["date_and_time"]
@@ -181,72 +192,6 @@ def reminder_text(message) -> None:
         )
 
     bot.delete_state(message.from_user.id, message.chat.id)
-
-# @bot.message_handler(state=MyStates.date_time)
-# def reminder_date_time(message) -> None:
-#     """Validate date, time and add reminder to DB"""
-
-#     r_date, r_time = message.text.split()
-
-#     try:
-#         datetime.datetime.strptime(r_date, '%Y-%m-%d')
-#     except ValueError:
-#         bot.send_message(message.chat.id, "Неверно введена дата.")
-#         return
-
-#     try:
-#         datetime.datetime.strptime(r_time, '%H:%M')
-#     except ValueError:
-#         bot.send_message(message.chat.id, "Неверно введено время.")
-#         return
-
-#     date_and_time = f"{message.text}:00"
-#     add_to_db(message.chat.id, date_and_time)
-
-#     bot.send_message(
-#         message.chat.id,
-#         "Напоминание установлено на " + date_and_time
-#         )
-
-#     bot.delete_state(message.from_user.id, message.chat.id)
-
-
-# @bot.message_handler(commands=["reminder"])
-# def reminder(message) -> None:
-#     """Handling /reminder and changind state"""
-
-#     bot.send_message(message.chat.id,
-#                      "Введите дату и время в формате YYYY-MM-DD HH:MM.")
-#     bot.set_state(message.from_user.id, MyStates.date_time, message.chat.id)
-
-
-# @bot.message_handler(state=MyStates.date_time)
-# def reminder_date_time(message) -> None:
-#     """Validate date, time and add reminder to DB"""
-
-#     r_date, r_time = message.text.split()
-
-#     try:
-#         datetime.datetime.strptime(r_date, '%Y-%m-%d')
-#     except ValueError:
-#         bot.send_message(message.chat.id, "Неверно введена дата.")
-#         return
-
-#     try:
-#         datetime.datetime.strptime(r_time, '%H:%M')
-#     except ValueError:
-#         bot.send_message(message.chat.id, "Неверно введено время.")
-#         return
-
-#     date_and_time = f"{message.text}:00"
-#     add_to_db(message.chat.id, date_and_time)
-
-#     bot.send_message(
-#         message.chat.id,
-#         "Напоминание установлено на " + date_and_time
-#         )
-
-#     bot.delete_state(message.from_user.id, message.chat.id)
 
 
 def add_to_db(user_id, date_time, reminder_text) -> None:
@@ -268,7 +213,7 @@ def add_to_db(user_id, date_time, reminder_text) -> None:
 
 
 def get_reminders():
-    """"""
+    """Check if there is someone to remind and remind if is"""
 
     db = sqlite3.connect('myassistant.db')
     c = db.cursor()
@@ -298,6 +243,8 @@ WHERE DATE(reminder_date) <= DATE('now')
 
 
 def remind_users(reminders):
+    """Send reminder messages to users"""
+
     for reminder in reminders:
         user_id, reminder_text = reminder
         bot.send_message(user_id, reminder_text)
@@ -417,6 +364,8 @@ def handle_valutes(message) -> None:
 
 @bot.message_handler(commands=["video"])
 def handle_video(message) -> None:
+    """Handling /video"""
+
     bot.send_message(
         message.chat.id, "Видос отсылать целиком или обрезать?",
         reply_markup=create_video_keyboard())
@@ -425,8 +374,9 @@ def handle_video(message) -> None:
 
 @bot.message_handler(state=MyStates.video_choose)
 def video_choose(message) -> None:
+    """Choosing mode"""
 
-    if message.text not in ['Целиком', 'Обрезать']:
+    if message.text not in video_modes:
         bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
         return
 
@@ -436,7 +386,7 @@ def video_choose(message) -> None:
         response = "Кидай ссылку."
         bot.set_state(message.from_user.id, MyStates.video_pure,
                       message.chat.id)
-    else:
+    else:  # Обрезанное
         response = "Кидай ссылку и тайминг в формате XX:XX-YY:YY"
         bot.set_state(message.from_user.id, MyStates.video_cut,
                       message.chat.id)
@@ -493,12 +443,17 @@ def video_cut(message) -> None:
 
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
-    for greeting in 'привет', 'здарова':
-        if greeting in message.text.lower():
-            bot.send_message(message.chat.id, 'Привет!')
-            return
+    if is_greeting(message.text.lower()):
+        bot.send_message(message.chat.id, 'Привет!')
+        return
 
     bot.send_message(message.chat.id, 'Сори, не знаю, как ответить :(')
+
+
+def is_greeting(message):
+    for greeting in 'привет', 'здарова':
+        if greeting in message:
+            return True
 
 
 bot.add_custom_filter(custom_filters.StateFilter(bot))

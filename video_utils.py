@@ -10,16 +10,21 @@ from typing import Tuple
 
 from my_secrets import DIRECTORY
 
-from moviepy.editor import VideoFileClip
+from moviepy.editor import VideoFileClip, AudioClip
+
+
+video_modes = ["Целиком", "Обрезать", "Только звук"]
 
 
 def create_video_keyboard():
-    markup = ReplyKeyboardMarkup(row_width=2)
-    markup.add(KeyboardButton("Целиком"), KeyboardButton("Обрезать"))
+    markup = ReplyKeyboardMarkup(row_width=len(video_modes))
+
+    for mode in video_modes:
+        markup.add(KeyboardButton(mode))
     return markup
 
 
-def try_download(chat_id: int, url: str, timing=None) -> Tuple[str, str, str]:
+def try_download(chat_id: int, url: str, content_type: str, timing=None) -> Tuple[str, str, str]:
     """Try to download video by url"""
 
     start, end = None, None
@@ -33,7 +38,7 @@ def try_download(chat_id: int, url: str, timing=None) -> Tuple[str, str, str]:
     # Validate timings if user asked to cut
     if timing is not None:
 
-        # Корректны ли введенные тайминги
+        # If timings are correct
 
         try:
             start, end = validate_timing(timing, v.length)
@@ -42,7 +47,6 @@ def try_download(chat_id: int, url: str, timing=None) -> Tuple[str, str, str]:
 
     # Try to do download video
     try:
-        # path = download_video(url, chat_id)
         video = v.streams.filter(progressive=True).last()
         video.download(output_path=DIRECTORY, filename=f'{chat_id}.mp4')
     except Exception as error:
