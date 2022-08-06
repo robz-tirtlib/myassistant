@@ -10,49 +10,80 @@ from typing import Tuple
 
 from my_secrets import DIRECTORY
 
-from moviepy.editor import VideoFileClip, AudioClip
+from moviepy.editor import VideoFileClip, AudioFileClip
+
+from my_exceptions import (InvalidUrlError, DownloadingError,
+                           IncorrectTimingsError)
 
 
-video_modes = ["Целиком", "Обрезать", "Только звук"]
+content_types = ["С картинкой", "Только звук"]
 
+content_modes = ["Целиком", "Обрезать"]
 
-def create_video_keyboard():
-    markup = ReplyKeyboardMarkup(row_width=len(video_modes))
+def create_content_types_keyboard():
+    markup = ReplyKeyboardMarkup(row_width=len(content_types))
 
-    for mode in video_modes:
+    for mode in content_types:
         markup.add(KeyboardButton(mode))
+
     return markup
 
 
-def try_download(chat_id: int, url: str, content_type: str, timing=None) -> Tuple[str, str, str]:
+def create_content_modes_keyboard():
+    markup = ReplyKeyboardMarkup(row_width=len(content_modes))
+
+    for mode in content_modes:
+        markup.add(KeyboardButton(mode))
+
+    return markup
+
+
+def get_content(user_input: str, user_id: int, c_type: str, c_mode: str) -> str:
+    if c_mode == "Обрезать":
+        url, timing = user_input.split()
+    else:
+        url, timing = user_input, None
+
+    path, start, end = download_content(url, user_id, c_type, timing)
+
+    if c_mode == "Целиком":
+        return path
+
+    path_cut = cut_content(user_id, *convert_timing(start, end), c_type)
+
+    return path_cut
+
+
+def download_content(url: str, user_id: int, c_type: str, timing) -> Tuple[str, str, str]:
     """Try to download video by url"""
 
     start, end = None, None
 
     # Check if URL is correct
     try:
-        v = YouTube(url)
-    except Exception as error:
-        raise error
+        content = YouTube(url)
+    except Exception:
+        raise InvalidUrlError
 
     # Validate timings if user asked to cut
     if timing is not None:
+        # Raises IncorrectTimingsError if timings are incorrect
+        start, end = validate_timing(timing, content.length)
 
-        # If timings are correct
-
-        try:
-            start, end = validate_timing(timing, v.length)
-        except ValueError as error:
-            raise error
-
-    # Try to do download video
+    # Try to do download content
     try:
-        video = v.streams.filter(progressive=True).last()
-        video.download(output_path=DIRECTORY, filename=f'{chat_id}.mp4')
-    except Exception as error:
-        raise error
+        args = (dict([['progressive', True]]) if c_type == 'video'
+                else dict([['type', 'audio']]))
+        content = content.streams.filter(**args).last()
+        extension = "mp4" if c_type == "video" else "mp3"
+        content.download(
+            output_path=DIRECTORY,
+            filename=f'{user_id}.{extension}'
+            )
+    except Exception:
+        raise DownloadingError
     else:
-        path = DIRECTORY + f'/{chat_id}.mp4'
+        path = DIRECTORY + f'/{user_id}.{extension}'
 
     return path, start, end
 
@@ -63,16 +94,13 @@ def validate_timing(timing: str, clip_len: int) -> Tuple[str, str]:
     and XX:XX < YY:YY and YY:YY < end of clip.
     """
 
-    try:
-        start, end = timing.split('-')
-        start = datetime.datetime.strptime(start, '%M:%S')
-        end = datetime.datetime.strptime(end, '%M:%S')
-        clip_len = f'{clip_len // 60}:{clip_len % 60}'
+    start, end = timing.split('-')
+    start = datetime.datetime.strptime(start, '%M:%S')
+    end = datetime.datetime.strptime(end, '%M:%S')
+    clip_len = f'{clip_len // 60}:{clip_len % 60}'
 
-        if end < start or end > datetime.datetime.strptime(clip_len, '%M:%S'):
-            raise ValueError
-    except ValueError:
-        raise ValueError("Неправильный формат данных, должно быть MM:SS-MM:SS")
+    if end < start or end > datetime.datetime.strptime(clip_len, '%M:%S'):
+        raise IncorrectTimingsError
 
     return start.strftime("%M:%S"), end.strftime("%M:%S")
 
@@ -85,16 +113,25 @@ def convert_timing(start, end):
     return start, end
 
 
-def cut_the_clip(message, start, end) -> str:
+def cut_content(user_id: int, start: int, end: int, c_type: str) -> str:
     """Cut downloaded clip"""
 
-    clip_name = message.chat.id
+    clip_name = user_id
 
-    with VideoFileClip(DIRECTORY + f"/{clip_name}.mp4") as clip:
+    if c_type == "video":
+        extension = "mp4"
+        obj = VideoFileClip
+    else:
+        extension = "mp3"
+        obj = AudioFileClip
+
+    with obj(DIRECTORY + f"/{clip_name}.{extension}") as clip:
         clip = clip.subclip(start, end)
-        clip.write_videofile(DIRECTORY + f"/cut{clip_name}.mp4")
+        write_method = (clip.write_videofile if c_type == "video"
+                        else clip.write_audiofile)
+        write_method(DIRECTORY + f"/cut{clip_name}.{extension}")
 
-    return DIRECTORY + f'/cut{clip_name}.mp4'
+    return DIRECTORY + f'/cut{clip_name}.{extension}'
 
 
 def clear(*args):

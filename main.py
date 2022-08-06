@@ -1,3 +1,10 @@
+"""
+TO DO:
+- Кнопки для выбора валют
+-
+"""
+
+
 from threading import Thread
 
 import schedule
@@ -20,8 +27,12 @@ import sqlite3
 
 from my_secrets import TOKEN
 
-from video_utils import (try_download, convert_timing, cut_the_clip, clear,
-                         create_video_keyboard, video_modes)
+from video_utils import (clear, get_content,
+                         create_content_types_keyboard, content_types,
+                         create_content_modes_keyboard, content_modes)
+
+from my_exceptions import (InvalidUrlError, IncorrectTimingsError,
+                           DownloadingError)
 
 from messages import start_message, help_message
 
@@ -52,10 +63,10 @@ bot.set_update_listener(listener)
 class MyStates(StatesGroup):
     """User's possible states"""
 
-    # Video
-    video_choose = State()
-    video_pure = State()
-    video_cut = State()
+    # Content
+    content_choose_type = State()
+    content_choose_mode = State()
+    content_finish = State()
 
     # Reminders
     date_time = State()
@@ -89,7 +100,10 @@ def help(message) -> None:
 def cancel_state(message) -> None:
     """Catches /cancel and cancels user's state"""
 
-    bot.send_message(message.chat.id, "Состояние сброшено.")
+    markup = telebot.types.ReplyKeyboardRemove()
+
+    bot.send_message(message.chat.id, "Состояние сброшено.",
+                     reply_markup=markup)
     bot.delete_state(message.from_user.id, message.chat.id)
 
 
@@ -359,85 +373,86 @@ def handle_valutes(message) -> None:
                      f"Сегодня такой движ:\n\nДоллар: {usd},\nЕвро: {eur}")
 
 
-"Video"
+"Content"
 
 
-@bot.message_handler(commands=["video"])
-def handle_video(message) -> None:
-    """Handling /video"""
+@bot.message_handler(commands=["content"])
+def handle_content(message) -> None:
+    """Handling /content"""
 
     bot.send_message(
-        message.chat.id, "Видос отсылать целиком или обрезать?",
-        reply_markup=create_video_keyboard())
-    bot.set_state(message.from_user.id, MyStates.video_choose, message.chat.id)
+        message.chat.id, "Качать с картинкой или только звук?",
+        reply_markup=create_content_types_keyboard())
+    bot.set_state(
+        message.from_user.id,
+        MyStates.content_choose_type,
+        message.chat.id
+        )
 
 
-@bot.message_handler(state=MyStates.video_choose)
-def video_choose(message) -> None:
-    """Choosing mode"""
+@bot.message_handler(state=MyStates.content_choose_type)
+def content_choose_type(message) -> None:
+    """Choosing content type"""
 
-    if message.text not in video_modes:
+    if message.text not in content_types:
         bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
         return
 
-    markup = telebot.types.ReplyKeyboardRemove()
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['content_type'] = ("video" if message.text == "С картинкой"
+                                else "audio")
 
-    if message.text == 'Целиком':
-        response = "Кидай ссылку."
-        bot.set_state(message.from_user.id, MyStates.video_pure,
-                      message.chat.id)
-    else:  # Обрезанное
-        response = "Кидай ссылку и тайминг в формате XX:XX-YY:YY"
-        bot.set_state(message.from_user.id, MyStates.video_cut,
-                      message.chat.id)
+    bot.send_message(message.chat.id, "Выбери режим.",
+                     reply_markup=create_content_modes_keyboard())
 
-    bot.send_message(message.chat.id, response, reply_markup=markup)
+    bot.set_state(message.from_user.id, MyStates.content_choose_mode,
+                  message.chat.id)
 
 
-@bot.message_handler(state=MyStates.video_pure)
-def video_pure(message) -> None:
+@bot.message_handler(state=MyStates.content_choose_mode)
+def content_choose_mode(message) -> None:
+    """Choosing content mode"""
 
-    url = message.text
-
-    try:
-        path, _, _ = try_download(message.chat.id, url)
-    except Exception as error:
-        bot.send_message(message.chat.id, str(error))
+    if message.text not in content_modes:
+        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
         return
 
-    with open(path, 'rb') as video:
-        bot.send_video(message.chat.id, video)
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        data['content_mode'] = message.text
+
+    reply = ("Кидай ссылку." if message.text == "Целиком"
+             else "Кидай ссылку и тайминг в формате XX:XX-YY:YY")
+
+    bot.send_message(message.chat.id, reply,
+                     reply_markup=telebot.types.ReplyKeyboardRemove())
+
+    bot.set_state(message.from_user.id, MyStates.content_finish,
+                  message.chat.id)
+
+
+@bot.message_handler(state=MyStates.content_finish)
+def content_finish(message) -> None:
+
+    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
+        try:
+            path = get_content(
+                message.text,
+                message.from_user.id,
+                data['content_type'],
+                data['content_mode']
+                )
+        except (InvalidUrlError, IncorrectTimingsError,
+                DownloadingError) as e:
+            bot.send_message(message.chat.id, e)
+            return
+
+    with open(path, "rb") as content:
+        send_method = (bot.send_video if data['content_type'] == 'video'
+                       else bot.send_audio)
+        send_method(message.from_user.id, content)
 
     clear(path)
 
-    bot.send_message(message.chat.id, "Ну вроде скачал и отправил.")
-    bot.delete_state(message.from_user.id, message.chat.id)
-
-
-@bot.message_handler(state=MyStates.video_cut)
-def video_cut(message) -> None:
-    url, timing = message.text.split()
-
-    try:
-        path, start, end = try_download(message.chat.id, url, timing)
-    except Exception as error:
-        bot.send_message(message.chat.id, str(error))
-
-    # Режем видос
-
-    with open(path, 'rb') as video:
-        path_cut = cut_the_clip(message, *convert_timing(start, end))
-
-    # Отправляем видос
-
-    with open(path_cut, 'rb') as video:
-        bot.send_video(message.chat.id, video)
-
-    # Очищаем машину от видоса
-
-    clear(path_cut, path)
-
-    bot.send_message(message.chat.id, "Ну вроде скачал, обрезал и отправил.")
     bot.delete_state(message.from_user.id, message.chat.id)
 
 
