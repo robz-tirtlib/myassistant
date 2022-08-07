@@ -12,7 +12,6 @@ MONTHS = [(i, calendar.month_name[i]) for i in range(1, 13)]
 
 def generate_calendar_days(year: int, month: int):
     keyboard = InlineKeyboardMarkup(row_width=7)
-    today = date.today()
 
     keyboard.add(
         InlineKeyboardButton(

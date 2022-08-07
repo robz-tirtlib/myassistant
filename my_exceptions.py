@@ -26,7 +26,15 @@ class DownloadingError(YouTubeErrors):
         self.message = "Скачать контент по присланной ссылке не вышло."
         super().__init__(self.message)
 
-# try:
-#     raise InvalidUrlError
-# except InvalidUrlError as error:
-#     print(error)
+
+class WeatherErrors(Exception):
+    """Base class for YouTube exceptions"""
+    pass
+
+
+class CityNotSupportedError(WeatherErrors):
+    """Exception raised if user's city is not supported by API"""
+
+    def __init__(self, *args) -> None:
+        self.message = "Получить информацию про данный город не вышло."
+        super().__init__(self.message)

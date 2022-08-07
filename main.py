@@ -1,29 +1,18 @@
-"""
-TO DO:
-- Кнопки для выбора валют
--
-"""
-
-
 from threading import Thread
 
 import schedule
 
 import time
 
-import requests
-
 import telebot
 
 import datetime
 from datetime import date
 
-from telebot import custom_filters, types
+from telebot import types
 from telebot.handler_backends import State, StatesGroup
 
 from telebot.storage import StateMemoryStorage
-
-import sqlite3
 
 from my_secrets import TOKEN
 
@@ -31,14 +20,18 @@ from video_utils import (clear, get_content,
                          create_content_types_keyboard, content_types,
                          create_content_modes_keyboard, content_modes)
 
-from my_exceptions import (InvalidUrlError, IncorrectTimingsError,
-                           DownloadingError)
+from my_exceptions import (CityNotSupportedError, InvalidUrlError,
+                           IncorrectTimingsError, DownloadingError)
 
 from messages import start_message, help_message
 
 from weather_utils import (ask_weather_api, create_weather_mode_keyboard,
                            create_weather_city_keyboard, weather_cities,
                            weather_modes)
+
+from valutes_utils import get_rates
+
+from reminder_utils import add_to_db, get_reminders
 
 from keyboards import (OUT_DATE, generate_calendar_days,
                        generate_calendar_months, EMTPY_FIELD)
@@ -69,7 +62,6 @@ class MyStates(StatesGroup):
     content_finish = State()
 
     # Reminders
-    date_time = State()
     reminder_time = State()
     reminder_text = State()
 
@@ -133,7 +125,7 @@ def calendar_action_handler(call: types.CallbackQuery):
     year, month = int(callback_data['year']), int(callback_data['month'])
     day = callback_data['day']
 
-    if day == EMTPY_FIELD:  # Prev/next month
+    if day == EMTPY_FIELD:  # Switch to prev/next month
         bot.edit_message_reply_markup(
             call.message.chat.id,
             call.message.id,
@@ -148,7 +140,7 @@ def calendar_action_handler(call: types.CallbackQuery):
         bot.delete_message(call.message.chat.id, call.message.id)
 
         bot.send_message(call.message.chat.id,
-                         "Напишите время в формате HH:MM")
+                         "Напиши время в формате HH:MM")
 
 
 @bot.callback_query_handler(func=None,
@@ -186,9 +178,10 @@ def reminder_time(message) -> None:
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         data["date_and_time"] = f"{data['reminder_date']} {message.text}:00"
 
-    bot.send_message(message.chat.id, "Введите текст напоминания.")
+    bot.send_message(message.chat.id, "Введи текст напоминания.")
 
-    bot.set_state(message.from_user.id, MyStates.reminder_text, message.chat.id)
+    bot.set_state(message.from_user.id, MyStates.reminder_text,
+                  message.chat.id)
 
 
 @bot.message_handler(state=MyStates.reminder_text)
@@ -208,64 +201,8 @@ def reminder_text(message) -> None:
     bot.delete_state(message.from_user.id, message.chat.id)
 
 
-def add_to_db(user_id, date_time, reminder_text) -> None:
-    """Adds reminder from user to DB"""
-
-    db = sqlite3.connect('myassistant.db')
-    c = db.cursor()
-
-    query = f"""
-    INSERT INTO reminders
-    VALUES
-        ({user_id}, datetime('{date_time}'), "{reminder_text}");
-    """
-    c.execute(query)
-
-    db.commit()
-
-    db.close()
-
-
-def get_reminders():
-    """Check if there is someone to remind and remind if is"""
-
-    db = sqlite3.connect('myassistant.db')
-    c = db.cursor()
-
-    query_select = """
-SELECT user_id, reminder_text
-FROM reminders
-WHERE DATE(reminder_date) <= DATE('now')
-      AND strftime('%H %M', datetime(reminder_date)) <= strftime('%H %M', datetime('now', 'localtime'));
-"""
-
-    c.execute(query_select)
-
-    reminders = c.fetchall()
-
-    query_delete = """
-DELETE FROM reminders
-WHERE DATE(reminder_date) <= DATE('now')
-      AND strftime('%H %M', datetime(reminder_date)) <= strftime('%H %M', datetime('now', 'localtime'));
-"""
-    c.execute(query_delete)
-
-    db.commit()
-    db.close()
-
-    remind_users(reminders)
-
-
-def remind_users(reminders):
-    """Send reminder messages to users"""
-
-    for reminder in reminders:
-        user_id, reminder_text = reminder
-        bot.send_message(user_id, reminder_text)
-
-
 def do_check_reminders():
-    schedule.every(3).seconds.do(get_reminders)
+    schedule.every(3).seconds.do(get_reminders, bot)
 
     while True:
         schedule.run_pending()
@@ -291,7 +228,7 @@ def weather_choose_mode(message) -> None:
     """Choose weather mode"""
 
     if message.text not in weather_modes:
-        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        bot.send_message(message.chat.id, "Воспользуйся кнопками.")
         return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
@@ -309,7 +246,7 @@ def weather_choose_mode(message) -> None:
 @bot.message_handler(state=MyStates.weather_choose_city)
 def weather_choose_city(message) -> None:
     if message.text not in weather_cities and message.text != 'другой':
-        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        bot.send_message(message.chat.id, "Воспользуйся кнопками.")
         return
 
     if message.text != "другой":
@@ -320,7 +257,7 @@ def weather_choose_city(message) -> None:
     else:
         markup = telebot.types.ReplyKeyboardRemove()
 
-        bot.send_message(message.chat.id, "Введите название города.",
+        bot.send_message(message.chat.id, "Введи название города.",
                          reply_markup=markup)
         bot.set_state(message.from_user.id, MyStates.weather_city_input,
                       message.chat.id)
@@ -340,8 +277,8 @@ def weather_final(id):
     with bot.retrieve_data(id) as data:
         try:
             info = ask_weather_api(data["city"], data['weather_mode'])
-        except ValueError as error:
-            bot.send_message(id, str(error) + "\nДавай по новой.")
+        except CityNotSupportedError as error:
+            bot.send_message(id, error + "\nДавай по новой.")
             bot.set_state(id, MyStates.weather_choose_mode)
 
     markup = telebot.types.ReplyKeyboardRemove()
@@ -358,19 +295,14 @@ def weather_final(id):
 def handle_valutes(message) -> None:
     """Calls an API to get today's exchange rates"""
 
-    url = 'https://www.cbr-xml-daily.ru/daily_json.js'
-
     try:
-        response = requests.get(url)
-        usd = response.json()["Valute"]["USD"]["Value"]
-        eur = response.json()["Valute"]["EUR"]["Value"]
+        rates = get_rates()
     except Exception:
         bot.send_message(message.chat.id,
-                         "К сожалению, получить информацию не вышло :(")
+                         "К сожалению, получить информацию не вышло.")
         return
 
-    bot.send_message(message.chat.id,
-                     f"Сегодня такой движ:\n\nДоллар: {usd},\nЕвро: {eur}")
+    bot.send_message(message.chat.id, rates)
 
 
 "Content"
@@ -395,7 +327,7 @@ def content_choose_type(message) -> None:
     """Choosing content type"""
 
     if message.text not in content_types:
-        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        bot.send_message(message.chat.id, "Воспользуйся кнопками.")
         return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
@@ -414,7 +346,7 @@ def content_choose_mode(message) -> None:
     """Choosing content mode"""
 
     if message.text not in content_modes:
-        bot.send_message(message.chat.id, "Воспользуйтесь кнопками.")
+        bot.send_message(message.chat.id, "Воспользуйся кнопками.")
         return
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
@@ -432,6 +364,7 @@ def content_choose_mode(message) -> None:
 
 @bot.message_handler(state=MyStates.content_finish)
 def content_finish(message) -> None:
+    """Sending content to user"""
 
     with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
         try:
@@ -458,6 +391,7 @@ def content_finish(message) -> None:
 
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
+    """Answer to random messages"""
     if is_greeting(message.text.lower()):
         bot.send_message(message.chat.id, 'Привет!')
         return
@@ -470,8 +404,6 @@ def is_greeting(message):
         if greeting in message:
             return True
 
-
-bot.add_custom_filter(custom_filters.StateFilter(bot))
 
 bind_filters(bot)
 

@@ -6,6 +6,8 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 from my_secrets import WEATHER_KEY
 
+from my_exceptions import CityNotSupportedError
+
 
 weather_modes = ["Текущая", "Сегодняшняя", "Завтрашняя"]
 weather_cities = ["Зеленоград", "Москва", "Кострома"]
@@ -41,7 +43,7 @@ def ask_weather_api(city, mode):
     }
 
     if not city_exists(params):
-        raise ValueError("Не удалось получить информацию по городу")
+        raise CityNotSupportedError()
 
     if mode == 'Текущая':
         return now_weather(params)

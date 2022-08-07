@@ -4,3 +4,6 @@ response.txt
 .venv
 __pycache__
 tmp_files
+materials
+db.py
+myassistant.db

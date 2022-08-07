@@ -1,0 +1,4 @@
+moviepy==1.0.3
+pyTelegramBotAPI==4.6.0
+pytube==12.1.0
+schedule==1.1.0

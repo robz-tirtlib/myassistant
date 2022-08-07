@@ -20,6 +20,7 @@ content_types = ["С картинкой", "Только звук"]
 
 content_modes = ["Целиком", "Обрезать"]
 
+
 def create_content_types_keyboard():
     markup = ReplyKeyboardMarkup(row_width=len(content_types))
 
@@ -38,7 +39,8 @@ def create_content_modes_keyboard():
     return markup
 
 
-def get_content(user_input: str, user_id: int, c_type: str, c_mode: str) -> str:
+def get_content(user_input: str, user_id: int,
+                c_type: str, c_mode: str) -> str:
     if c_mode == "Обрезать":
         url, timing = user_input.split()
     else:
@@ -54,7 +56,8 @@ def get_content(user_input: str, user_id: int, c_type: str, c_mode: str) -> str:
     return path_cut
 
 
-def download_content(url: str, user_id: int, c_type: str, timing) -> Tuple[str, str, str]:
+def download_content(url: str, user_id: int,
+                     c_type: str, timing) -> Tuple[str, str, str]:
     """Try to download video by url"""
 
     start, end = None, None
