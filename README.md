@@ -4,7 +4,7 @@ Personal assistant-bot in Telegram with the following functionality:
 - downloading content from YouTube
 - showing exchange rates
 - showing weather forecasts
-- set reminders
+- setting reminders
 
 # Installation and setup
 
