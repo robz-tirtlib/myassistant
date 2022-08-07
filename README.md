@@ -12,7 +12,7 @@ Note: To setup this project you have to have ```pip``` installed.
 
 At first, clone project to your local machine:
 
-```git clone link```
+```git clone https://github.com/robz-tirtlib/myassistant.git```
 
 cd into project folder:
 
