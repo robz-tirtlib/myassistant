@@ -29,6 +29,14 @@ Install dependencies using requirements.txt:
 
 ```pip install -r requirements.txt```
 
+You also need to create my_secrets.py file in which you have to specify following variables:
+
+```
+TOKEN='Your Telegram bot token'
+DIRECTORY='Path to storage of temp files'
+WEATHER_KEY='API key to access https://openweathermap.org/api'
+```
+
 Run main.py:
 
 ```python3 main.py```
@@ -37,7 +45,6 @@ Run main.py:
 
 To get a brief overview of available commands send ```/help```.
 
-<!-- ![image info](project_showcase/help.jpg) -->
 <img src="project_showcase/help.jpg" alt="drawing" width="500"/>
 
 ---
