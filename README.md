@@ -1,6 +1,6 @@
 # MyAssistant
 
-Personal assistant-bot in Telegram with the following functionality:
+Personal assistant-bot for Telegram with the following functionality:
 - downloading content from YouTube
 - showing exchange rates
 - showing weather forecasts
