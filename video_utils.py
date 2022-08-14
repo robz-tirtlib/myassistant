@@ -91,28 +91,47 @@ def download_content(url: str, user_id: int,
     return path, start, end
 
 
-def validate_timing(timing: str, clip_len: int) -> Tuple[str, str]:
+def validate_timing(timing: str, clip_len: int) -> Tuple[datetime.datetime]:
     """
     Check if timing sent by user is in XX:XX-YY:YY format
     and XX:XX < YY:YY and YY:YY < end of clip.
     """
 
     start, end = timing.split('-')
-    start = datetime.datetime.strptime(start, '%M:%S')
-    end = datetime.datetime.strptime(end, '%M:%S')
-    clip_len = f'{clip_len // 60}:{clip_len % 60}'
 
-    if end < start or end > datetime.datetime.strptime(clip_len, '%M:%S'):
+    try:
+        start = datetime.datetime.strptime(start, '%M:%S')
+        end = datetime.datetime.strptime(end, '%M:%S')
+    except ValueError:
+        try:
+            start = datetime.datetime.strptime(start, '%H:%M:%S')
+            end = datetime.datetime.strptime(end, '%H:%M:%S')
+        except ValueError:
+            raise IncorrectTimingsError
+
+    try:
+        mins, secs = clip_len // 60, clip_len % 60
+        clip_len = datetime.datetime.strptime(f'{mins}:{secs}', '%M:%S')
+    except ValueError:
+        try:
+            hours, left = clip_len // 3600, clip_len % 3600
+            mins, secs = left // 60, left % 60
+            clip_len = datetime.datetime.strptime(f'{hours}:{mins}:{secs}',
+                                                  '%H:%M:%S')
+        except ValueError:
+            raise DownloadingError
+
+    if end < start or end > clip_len:
         raise IncorrectTimingsError
 
-    return start.strftime("%M:%S"), end.strftime("%M:%S")
+    return start, end
 
 
-def convert_timing(start, end):
+def convert_timing(start: datetime.datetime, end: datetime.datetime):
     """Convert from XX:XX format to seconds"""
 
-    start = int(start[:2]) * 60 + int(start[3:])
-    end = int(end[:2]) * 60 + int(end[3:])
+    start = start.hour * 3600 + start.minute * 60 + start.second
+    end = end.hour * 3600 + end.minute * 60 + end.second
     return start, end
 
 
