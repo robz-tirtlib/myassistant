@@ -21,7 +21,8 @@ from video_utils import (clear, get_content,
                          create_content_modes_keyboard, content_modes)
 
 from my_exceptions import (CityNotSupportedError, InvalidUrlError,
-                           IncorrectTimingsError, DownloadingError)
+                           IncorrectTimingsError, DownloadingError,
+                           VoiceConversionError, VoiceDownloadingError)
 
 from messages import start_message, help_message
 
@@ -32,6 +33,8 @@ from weather_utils import (ask_weather_api, create_weather_mode_keyboard,
 from valutes_utils import get_rates
 
 from reminder_utils import add_to_db, get_reminders
+
+from voice_utils import text_from_voice
 
 from keyboards import (OUT_DATE, generate_calendar_days,
                        generate_calendar_months, EMTPY_FIELD)
@@ -387,6 +390,15 @@ def content_finish(message) -> None:
     clear(path)
 
     bot.delete_state(message.from_user.id, message.chat.id)
+
+
+@bot.message_handler(content_types=['voice'])
+def handle_voices(message):
+    try:
+        text = text_from_voice(bot, message)
+    except (VoiceDownloadingError, VoiceConversionError) as error:
+        text = error
+    bot.send_message(message.from_user.id, text)
 
 
 @bot.message_handler(content_types=["text"])

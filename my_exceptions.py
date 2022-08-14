@@ -38,3 +38,24 @@ class CityNotSupportedError(WeatherErrors):
     def __init__(self, *args) -> None:
         self.message = "Получить информацию про данный город не вышло."
         super().__init__(self.message)
+
+
+class VoiceConversionErrors(Exception):
+    """Base class for recognizing speech errors"""
+    pass
+
+
+class VoiceDownloadingError(VoiceConversionErrors):
+    """Exception raised if an error occured while downloading voice"""
+
+    def __init__(self, *args) -> None:
+        self.message = "Не удалось получить сообщение с серверов Telegram."
+        super().__init__(self.message)
+
+
+class VoiceConversionError(VoiceConversionErrors):
+    """Exception raised if an error occured while recognizing speech"""
+
+    def __init__(self, *args) -> None:
+        self.message = "Не удалось распознать речь."
+        super().__init__(self.message)
