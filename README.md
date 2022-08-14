@@ -8,7 +8,7 @@ Personal assistant-bot in Telegram with the following functionality:
 
 # Installation and setup
 
-Note: To setup this project you have to have ```pip``` installed.
+Note: To setup this project you have to have ```pip``` and ```ffmpeg``` installed.
 
 At first, clone project to your local machine:
 
@@ -35,6 +35,7 @@ You also need to create my_secrets.py file in which you have to specify followin
 TOKEN='Your Telegram bot token'
 DIRECTORY='Path to storage of temp files'
 WEATHER_KEY='API key to access https://openweathermap.org/api'
+FFMPEG_PATH='C:\\ffmpeg\\bin\\ffmpeg.exe'
 ```
 
 Run main.py:
